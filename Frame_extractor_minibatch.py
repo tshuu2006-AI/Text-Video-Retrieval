@@ -72,6 +72,12 @@ def load_model(model_id="laion/CLIP-ViT-L-14-laion2B-s32B-b82K", device="cuda", 
     processor = CLIPProcessor.from_pretrained(model_id, cache_dir=cache_dir, use_fast=use_fast)
     return model, processor
 
+#Nhận biết ảnh nhòe
+def is_blurry(image, threshold=90):
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    lap_var = cv2.Laplacian(image, cv2.CV_64F).var()
+    return lap_var < threshold
+
 def keyframe_detection(embeddings, threshold=0.85):
     # Normalize
     normalize_embeddings = F.normalize(embeddings, p=2, dim=1)
@@ -94,13 +100,13 @@ def embedding_comparison(collection, embeddings, threshold):
     duplicate_idx = []
     for hits in results:
         if len(hits) == 0:
-            return torch.tensor([], dtype = torch.bool)
-        if hits[0].score> threshold:
+            duplicate_idx.append(False)
+        elif hits[0].score> threshold:
             duplicate_idx.append(True)
         else:
             duplicate_idx.append(False)
 
-    return torch.tensor(duplicate_idx, dtype=torch.bool)
+    return torch.tensor(duplicate_idx, dtype = torch.bool)
 
 def frame_processing(model, processor, collection, frame_buffer, time_stamps, threshold, device = "cuda"):
     inputs = processor(images=frame_buffer, return_tensors="pt", padding=True).to(device)
@@ -108,6 +114,7 @@ def frame_processing(model, processor, collection, frame_buffer, time_stamps, th
         embeddings = model.get_image_features(**inputs)
 
     keyframe_embeddings, keep_mask = keyframe_detection(embeddings, threshold)
+    print(f"get {len(keep_mask)} keyframes in batch")
     time_stamps = [time_stamps[i] for i in range(len(keep_mask)) if keep_mask[i]]
     keyframes = [frame_buffer[i] for i in range(len(keep_mask)) if keep_mask[i]]
 
@@ -115,7 +122,10 @@ def frame_processing(model, processor, collection, frame_buffer, time_stamps, th
         return np.array([]), [], []
     keyframe_embeddings = keyframe_embeddings.cpu().numpy()
     duplicate_mask = embedding_comparison(collection, keyframe_embeddings, threshold=threshold)
+    if duplicate_mask.shape[0] == 0:
+        return np.array([]), [], []
     unduplicate_mask = ~duplicate_mask
+    print(f"get {sum(unduplicate_mask)} in db")
 
     # Cập nhật time_stamps và keyframes dựa trên keep_mask
     keyframe_embeddings = keyframe_embeddings[unduplicate_mask]
@@ -134,10 +144,11 @@ def write_frames(video_id_without_ext, frame_dir, keyframes, frame_count):
         keyframes[i].save(save_path)
         frame_count += 1
 
+    print(f"saved {len(frame_ids)}")
     return frame_ids, frame_count
 
 
-def extract_keyframes(model, processor, collection, batch_path, outer_bar, batch_size=64, threshold=0.9,
+def extract_keyframes(model, processor, collection, batch_path, outer_bar, batch_size=64, threshold=0.8,
                       frame_interval=1, device="cuda"):
     video_folder = os.path.join(batch_path, "video")
     root_frame_dir = os.path.join(batch_path, "frames")
@@ -156,12 +167,16 @@ def extract_keyframes(model, processor, collection, batch_path, outer_bar, batch
         time_stamps = []
         current_time = 0
         cap = cv2.VideoCapture(os.path.join(video_folder, video_id))
-
         while True:
             cap.set(cv2.CAP_PROP_POS_MSEC, current_time * 1000)
             ret, frame = cap.read()
+
             if not ret:
                 break
+
+            if is_blurry(frame):
+                current_time += frame_interval
+                continue
 
             frame_buffer.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
             time_stamps.append(current_time)
@@ -221,6 +236,6 @@ if __name__ == "__main__":
                           processor=processor,
                           collection=collection,
                           batch_path=batch_dir,
-                          threshold=0.85,
+                          threshold=0.8,
                           frame_interval=1,
                           outer_bar=outer_bar)

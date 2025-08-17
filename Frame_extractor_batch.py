@@ -73,6 +73,12 @@ def load_model(model_id="laion/CLIP-ViT-L-14-laion2B-s32B-b82K", device="cuda", 
     processor = CLIPProcessor.from_pretrained(model_id, cache_dir=cache_dir, use_fast=use_fast)
     return model, processor
 
+def is_blurry(image, threshold=100):
+    image = cv2.resize(image, (128, 128))
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    lap_var = cv2.Laplacian(image, cv2.CV_64F).var()
+    return lap_var < threshold
+
 def keyframe_detection(embeddings, threshold=0.85):
     # Normalize
     normalize_embeddings = F.normalize(embeddings, p=2, dim=1)
@@ -161,6 +167,9 @@ def extract_keyframes(model, processor, collection, batch_path, outer_bar, thres
             ret, frame = cap.read()
             if not ret:
                 break
+
+            if is_blurry(frame):
+                continue
 
             frame_buffer.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
             time_stamps.append(current_time)
