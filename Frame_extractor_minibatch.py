@@ -86,13 +86,14 @@ def load_model(model_id="laion/CLIP-ViT-L-14-laion2B-s32B-b82K", device="cuda", 
     return model, processor
 
 #Nhận biết ảnh nhòe
-def is_blurry(image, threshold=100) -> bool:
+def is_blurry(image, blur_threshold=100, histogram_threshold = 0.55) -> bool:
 
     """
     Define an image is blurred or not
         Args:
             image: OpenCV.image (numpy.ndarray)
-            threshold: Laplacian threshold (int)
+            blur_threshold: Laplacian threshold (float)
+            histogram_threshold: Histogram threshold (float)
 
         Returns:
             Is blur or not (bool)
@@ -100,9 +101,12 @@ def is_blurry(image, threshold=100) -> bool:
 
     image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     lap_var = cv2.Laplacian(image, cv2.CV_64F).var()
-    return lap_var < threshold
 
-def keyframe_detection(embeddings, threshold=0.8) -> tuple[torch.Tensor, torch.Tensor]:
+    std_dev = np.std(image)
+    normalized_std_dev = std_dev / 127.5
+    return lap_var < blur_threshold or normalized_std_dev < histogram_threshold
+
+def keyframe_detection(embeddings, threshold=0.95) -> tuple[torch.Tensor, torch.Tensor]:
     """
     detect the keyframes of the mini batch of current embeddings
         Args:
@@ -138,7 +142,7 @@ def embedding_comparison(collection, embeddings, threshold):
     """
 
     results = collection.search(
-        data = embeddings,
+        data = embeddings.cpu().tolist(),
         anns_field = VECTOR_FIELD_NAME,
         param = {"metric_type": "IP", "params": {"nprobe": 10}},
         limit = 1
@@ -183,14 +187,13 @@ def frame_processing(model, processor, collection, frame_buffer, time_stamps, th
     keyframes = [frame_buffer[i] for i in range(len(keep_mask)) if keep_mask[i]]
 
     if len(keyframes) == 0:
-        return np.array([]), [], []
-    keyframe_embeddings = keyframe_embeddings.cpu().numpy()
+        return torch.tensor([]), [], []
     duplicate_mask = torch.zeros(size = (len(keyframe_embeddings), ), dtype = torch.bool)
 
     if collection.num_entities > 0:
         duplicate_mask = embedding_comparison(collection, keyframe_embeddings, threshold=threshold)
     if duplicate_mask.shape[0] == 0:
-        return np.array([]), [], []
+        return torch.tensor([]), [], []
     unduplicate_mask = ~duplicate_mask
 
     # Cập nhật time_stamps và keyframes dựa trên keep_mask
@@ -201,48 +204,62 @@ def frame_processing(model, processor, collection, frame_buffer, time_stamps, th
     return keyframe_embeddings, keyframes, time_stamps
 
 
-def write_frames(video_id_without_ext, frame_dir, keyframes, frame_count):
+def write_frames(video_id_without_ext, root_frame_dir, keyframes):
     """
         Detect the embeddings that differ from the embeddings in the database
 
             Args:
-                video_id_without_ext: The video ids without extensions (String)
-                frame_dir: the directories of the frames that will be added (String)
+                video_id_without_ext: The video ids without extensions (list[String])
+                root_frame_dir: the directory of the root frame folder (String)
                 keyframes: The frames that will be added (list[PIL.Image])
-                frame_count: The current orders of the frames before adding (int)
-
 
             Returns:
                 frame_ids: The ids of the frame (list[String])
-                frame_count: The current orders of the frames after adding (int)
         """
     frame_ids = []
-    for i in range(len(keyframes)):
-        frame_id = f"{video_id_without_ext}_keyframe_{frame_count:04d}.jpg"
+    frame_dir = root_frame_dir
+    frame_count = 0
+    prev_id = None
+    for i in range(len(video_id_without_ext)):
+        cur_id = video_id_without_ext[i]
+        if cur_id != prev_id:
+            frame_dir = os.path.join(root_frame_dir, cur_id)
+            os.makedirs(frame_dir, exist_ok=True)
+            prev_id = cur_id
+            frame_count = 0
+
+        frame_id = f"{cur_id}_keyframe_{frame_count:04d}.jpg"
         save_path = os.path.join(frame_dir, frame_id)
         frame_ids.append(frame_id)
         keyframes[i].save(save_path)
         frame_count += 1
 
-    return frame_ids, frame_count
+    return frame_ids
 
 
-def extract_keyframes(model, processor, collection, batch_path, outer_bar, batch_size=64, threshold=0.8,
-                      frame_interval=1, device="cuda"):
+def extract_keyframes(model, processor, collection, batch_path, outer_bar, batch_size=64, threshold=0.95,
+                      frame_interval=0.5, device="cuda"):
     video_folder = os.path.join(batch_path, "video")
-    root_frame_dir = os.path.join          (batch_path, "frames")
+    root_frame_dir = os.path.join(batch_path, "frames")
     os.makedirs(root_frame_dir, exist_ok=True)
     video_ids = os.listdir(video_folder)
-    batch = []
+    frame_dirs = []
+    video_ids_without_ext = []
+    final_embeddings = None
+    final_keyframes = []
+    final_timestamps = []
+
     for idx, video_id in enumerate(video_ids, start=1):
+        frame_count = 0
         outer_bar.set_postfix(video=f"{idx}/{len(video_ids)} {video_id}")
 
         video_id_without_ext, ext = os.path.splitext(video_id)
+
         frame_dir = os.path.join(root_frame_dir, video_id_without_ext)
+        frame_dirs.append(frame_dir)
         os.makedirs(frame_dir, exist_ok=True)
 
         frame_buffer = []
-        frame_count = 0
         time_stamps = []
         cap = cv2.VideoCapture(os.path.join(video_folder, video_id))
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -269,13 +286,14 @@ def extract_keyframes(model, processor, collection, batch_path, outer_bar, batch
             if len(frame_buffer) == batch_size:
 
                 keyframe_embeddings, keyframes, time_stamps = frame_processing(model, processor, collection, frame_buffer, time_stamps, threshold, device = device)
-                frame_ids, frame_count = write_frames(video_id_without_ext = video_id_without_ext, frame_dir = frame_dir, keyframes = keyframes, frame_count = frame_count)
+                frame_count += len(keyframe_embeddings)
 
-                batch.extend([{"video_id": video_id,
-                          "frame_id": frame_ids[i],
-                          "time_stamp": time_stamps[i],
-                          "embedding": keyframe_embeddings[i]}
-                        for i in range(len(frame_ids))])
+                if final_embeddings is None:
+                    final_embeddings = keyframe_embeddings
+                else:
+                    final_embeddings = torch.cat([final_embeddings, keyframe_embeddings])
+                final_keyframes.extend(keyframes)
+                final_timestamps.extend(time_stamps)
 
                 torch.cuda.empty_cache()
 
@@ -287,23 +305,33 @@ def extract_keyframes(model, processor, collection, batch_path, outer_bar, batch
         # Xử lý phần còn lại trong buffer
         if len(frame_buffer) > 0:
             keyframe_embeddings, keyframes, time_stamps = frame_processing(model, processor, collection, frame_buffer, time_stamps, threshold, device=device)
+            frame_count += len(keyframe_embeddings)
 
-            frame_ids, frame_count = write_frames(video_id_without_ext=video_id_without_ext, frame_dir=frame_dir,
-                                     keyframes=keyframes, frame_count = frame_count)
+            if final_embeddings is None:
+                final_embeddings = keyframe_embeddings
+            else:
+                final_embeddings = torch.cat([final_embeddings, keyframe_embeddings])
 
-            batch.extend([{"video_id": video_id,
-                      "frame_id": frame_ids[i],
-                      "time_stamp": time_stamps[i],
-                      "embedding": keyframe_embeddings[i]}
-                     for i in range(len(frame_ids))])
+            final_keyframes.extend(keyframes)
+            final_timestamps.extend(time_stamps)
 
-        final_embeddings = torch.stack([item["embedding"] for item in batch])
-        final_distinct_embeddings, final_keep_mask = keyframe_detection(final_embeddings, threshold = 0.9)
 
-        batch = [batch[i] for i in range(len(batch)) if final_keep_mask[i]]
-
+        video_ids_without_ext.extend([video_id_without_ext for _ in range(frame_count)])
         torch.cuda.empty_cache()
         cap.release()
+
+    final_distinct_embeddings, final_keep_mask = keyframe_detection(final_embeddings, threshold = 0.95)
+    final_timestamps = [final_timestamps[i] for i in range(len(final_keep_mask)) if final_keep_mask[i]]
+    final_keyframes = [final_keyframes[i] for i in range(len(final_keep_mask)) if final_keep_mask[i]]
+    video_ids_without_ext = [video_ids_without_ext[i] for i in range(len(final_keep_mask)) if final_keep_mask[i]]
+    final_distinct_embeddings = final_distinct_embeddings.cpu().numpy().astype(np.float32)
+    frame_ids = write_frames(video_id_without_ext = video_ids_without_ext, root_frame_dir = root_frame_dir, keyframes = final_keyframes)
+
+    batch = [{"video_id": video_ids_without_ext[i],
+              "frame_id": frame_ids[i],
+              "time_stamp": final_timestamps[i],
+              "embedding": final_distinct_embeddings[i]}
+             for i in range(len(frame_ids))]
 
     return batch
 
@@ -325,8 +353,8 @@ if __name__ == "__main__":
                           processor=processor,
                           collection=collection,
                           batch_path=batch_dir,
-                          threshold=0.9,
-                          frame_interval=1,
+                          threshold=0.95,
+                          frame_interval = 0.5,
                           outer_bar=outer_bar)
 
         add_records(collection, vector_batch)
