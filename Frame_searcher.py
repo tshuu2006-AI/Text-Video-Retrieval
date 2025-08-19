@@ -3,6 +3,7 @@ from Frame_extractor_minibatch import load_model
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+from translate_vi_en import translate_vi_to_en   # import hàm dịch
 
 
 def plot_4_images(img_paths, titles=None):
@@ -32,6 +33,10 @@ collection = Collection("VIDEO_KeyFrames")
 collection.load()
 model, processor = load_model(use_fast=False)
 text_input = [input()]
+
+text_en = translate_vi_to_en(text_input)
+text_input = [text_en]
+
 inputs = processor(text = text_input, images= None, return_tensors="pt", padding=True).to("cuda")
 
 with torch.no_grad():
