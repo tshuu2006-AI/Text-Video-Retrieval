@@ -1,0 +1,1 @@
+def load_embedding_layer(embedding_dir = "")

@@ -1,36 +1,15 @@
 from pymilvus import Collection, connections
-from Frame_extractor_minibatch import load_model
+from Frame_extractor_minibatch import load_embedding_model
 import torch
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
+import Constants as C
 
-
-def plot_4_images(img_paths, titles=None):
-    """
-    Hiển thị 4 ảnh trong lưới 2x2 bằng matplotlib
-
-    Args:
-        img_paths (list): danh sách 4 đường dẫn ảnh
-        titles (list): danh sách 4 tiêu đề (optional)
-    """
-    fig, axes = plt.subplots(2, 2, figsize=(8, 8))
-    axes = axes.ravel()  # flatten về 1D để dễ duyệt
-
-    for i, path in enumerate(img_paths):
-        img = mpimg.imread(path)
-        axes[i].imshow(img)
-        axes[i].axis("off")  # tắt trục
-        if titles and i < len(titles):
-            axes[i].set_title(titles[i], fontsize=12)
-
-    plt.tight_layout()
-    plt.show()
 
 
 connections.connect(alias = "default", host = "localhost", port = "19530")
-collection = Collection("VIDEO_KeyFrames")
+collection = Collection(C.PYMILVUS_COLLECTION_NAME)
 collection.load()
-model, processor = load_model(use_fast=False)
+model, processor = load_embedding_model(use_fast=False)
 text_input = [input()]
 inputs = processor(text = text_input, images= None, return_tensors="pt", padding=True).to("cuda")
 
