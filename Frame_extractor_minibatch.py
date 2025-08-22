@@ -1,4 +1,6 @@
 from pymilvus import connections, FieldSchema, CollectionSchema, DataType, Collection
+
+from Constants import BATCH_DIRS
 from Preprocessing import load_embedding_model, extract_keyframes, load_Yolo
 from tqdm import tqdm
 import Constants as C
@@ -14,13 +16,27 @@ def db_initialization(name, alias, host, port):
 
     # Nếu chưa có milvus_collection
     fields = [
-        FieldSchema(name = C.VIDEO_ID_NAME, dtype=DataType.VARCHAR, max_length=255),
-        FieldSchema(name= C.FRAME_ID_NAME, dtype=DataType.VARCHAR, max_length=255, is_primary=True),
-        FieldSchema(name= C.TIME_STAMPS_NAME, dtype=DataType.FLOAT),
-        FieldSchema(name = C.VECTOR_EMBEDDING_NAME, dtype=DataType.FLOAT_VECTOR, dim=768),
-        FieldSchema(name = C.FRAME_PATH_NAME, dtype = DataType.VARCHAR, max_length = 255),
-        FieldSchema(name = C.VECTOR_OBJECT_NAME, dtype = DataType.FLOAT_VECTOR, dim = 50),
-        FieldSchema(name = C.NUM_OBJECTS, dtype = DataType.INT8)
+        FieldSchema(name = C.VIDEO_ID_NAME,
+                    dtype=DataType.VARCHAR,
+                    max_length=255),
+        FieldSchema(name= C.FRAME_ID_NAME,
+                    dtype=DataType.VARCHAR,
+                    max_length=255,
+                    is_primary=True),
+        FieldSchema(name= C.TIME_STAMPS_NAME,
+                    dtype=DataType.FLOAT),
+        FieldSchema(name = C.VECTOR_EMBEDDING_NAME,
+                    dtype=DataType.FLOAT_VECTOR,
+                    dim=768),
+        FieldSchema(name = C.FRAME_PATH_NAME,
+                    dtype = DataType.VARCHAR,
+                    max_length = 255),
+        FieldSchema(name = C.VECTOR_OBJECT_NAME,
+                    dtype = DataType.ARRAY,
+                    dim = 50,
+                    element_type=DataType.INT16,
+                    max_capacity = 50,
+                    nullable=True),
     ]
 
     schema = CollectionSchema(fields, description=C.PYMILVUS_DESCRIPTION)
@@ -40,17 +56,6 @@ def db_initialization(name, alias, host, port):
 
         collection.create_index(
             field_name=C.VECTOR_EMBEDDING_NAME,
-            index_params=index_params
-        )
-
-        index_params = {
-            "metric_type": "L2",
-            "index_type": "FLAT",
-            "params": {}
-        }
-
-        collection.create_index(
-            field_name=C.VECTOR_OBJECT_NAME,
             index_params=index_params
         )
     else:
@@ -87,7 +92,7 @@ if __name__ == "__main__":
                                           port="19530")
     print()
 
-    outer_bar = tqdm([0, 2], desc="Processing batches", unit="batch", position=0)
+    outer_bar = tqdm(range(len(BATCH_DIRS)), desc="Processing batches", unit="batch", position=0)
 
     for i in outer_bar:
         batch_dir = C.BATCH_DIRS[i]
@@ -97,7 +102,7 @@ if __name__ == "__main__":
                                          detector = detector,
                                          collection=milvus_collection,
                                          batch_path=batch_dir,
-                                         threshold=0.95,
+                                         threshold=0.9,
                                          frame_interval = 0.75,
                                          outer_bar=outer_bar)
 

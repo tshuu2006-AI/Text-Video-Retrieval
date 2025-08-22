@@ -1,65 +1,25 @@
 from pymilvus import Collection, connections
-from Frame_extractor_minibatch import load_model
-import torch
-import torch.nn.functional as F
-import matplotlib.pyplot as plt
-
-
-def plot_4_images(img_paths, titles=None):
-    """
-    Hiển thị 4 ảnh trong lưới 2x2 bằng matplotlib
-
-    Args:
-        img_paths (list): danh sách 4 đường dẫn ảnh
-        titles (list): danh sách 4 tiêu đề (optional)
-    """
-    fig, axes = plt.subplots(2, 2, figsize=(8, 8))
-    axes = axes.ravel()  # flatten về 1D để dễ duyệt
-
-    for i, path in enumerate(img_paths):
-        img = mpimg.imread(path)
-        axes[i].imshow(img)
-        axes[i].axis("off")  # tắt trục
-        if titles and i < len(titles):
-            axes[i].set_title(titles[i], fontsize=12)
-
-    plt.tight_layout()
-    plt.show()
-
+from Searcher import search_by_semantic, search_by_objects, extract_noun_phrases_spacy, get_embeddings
+from Preprocessing import load_embedding_model
 
 connections.connect(alias = "default", host = "localhost", port = "19530")
 collection = Collection("VIDEO_KeyFrames")
 collection.load()
-model, processor = load_model(use_fast=False)
-text_input = [input()]
-inputs = processor(text = text_input, images= None, return_tensors="pt", padding=True).to("cuda")
+model, processor = load_embedding_model(use_fast=False)
 
-with torch.no_grad():
-    embeddings = F.normalize(model.get_text_features(**inputs), p = 2, dim = 1).cpu().numpy()
+text_input = input()
+entities = extract_noun_phrases_spacy(text_input)
+entity_embeddings = get_embeddings(model, processor, entities)
+results = search_by_semantic(text_input, processor=processor, model=model, collection= collection, top_k=100)
 
-print(embeddings)
-
-results = collection.search(
-    data=embeddings,     # embedding cần tìm
-    anns_field="embedding",  # tên field vector trong schema
-    param={"metric_type": "IP", "params": {"nprobe": 10}},
-    limit=4,                 # lấy top-5 gần nhất
-    output_fields=["video_id", "frame_id", "time_stamp"]  # trả về thêm các field khác
-)
-
-i = 0
-dirs = []
-frame_dir = []
 for hits in results:
-    for hit in hits:
-        video_id = hit.entity.get("video_id")
-        frame_id = hit.entity.get("frame_id")
-        time_stamp = hit.entity.get("time_stamp")
+    best, scores = search_by_objects(hits, entity_embeddings, top_k=5)
+    for i, hit in enumerate(best):
+        print(f"Video Id {i}: {hit.entity.get('video_id')}")
+        print(f"scores {i}: {hit.score}")
+        print(f"total scores {i}: {scores[i]}")
+        print(f"Frame Id {i}: {hit.entity.get('frame_id')}")
 
-        print(f"video_id {i}: {video_id}")
-        print(f"frame_id {i}: {frame_id}")
-        print(f"time_stamp {i}: {time_stamp}")
-        print()
-        i += 1
+
 
 

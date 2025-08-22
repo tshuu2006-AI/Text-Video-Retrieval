@@ -39,7 +39,7 @@ def load_Yolo(model_dir = "Models/yolov8x-oiv7.pt"):
 
 
 
-def Yolo_object_detection(detector, frames, batch_size = 4, threshold = 0.35, max_padding = 50, pad_value = -1):
+def Yolo_object_detection(detector, frames, batch_size = 4, threshold = 0.7, max_padding = 50, pad_value = 0):
     """
         Detect th e objects in the images
             Args:
@@ -59,21 +59,14 @@ def Yolo_object_detection(detector, frames, batch_size = 4, threshold = 0.35, ma
         result = detector(frames[i: i + batch_size], verbose = False)
         results.extend(result)
     class_results = []
-    num_objects = []
+
     for r in results:
         class_ids = r.boxes.cls.cpu().numpy()
         confidence = r.boxes.conf.cpu().numpy()
-        objects = class_ids[confidence > threshold].astype(np.float32)
-        if len(objects) > max_padding:
-            num_objects.append(max_padding)
-            padded_object = objects[:max_padding]
-        else:
-            num_objects.append(len(objects))
-            right_pad = max_padding - len(objects)
-            padded_object = np.pad(objects, (0, right_pad), mode = "constant", constant_values=-1)
-        class_results.append(padded_object)
+        objects = class_ids[confidence > threshold].astype(int).tolist()
+        class_results.append(objects)
     torch.cuda.empty_cache()
-    return class_results, num_objects
+    return class_results
 
 
 def load_embedding_model(model_id = C.EMBEDDING_MODEL_ID, device="cuda", use_fast=False):
@@ -323,7 +316,7 @@ def extract_keyframes(model, processor, detector, collection, batch_path, outer_
     final_distinct_embeddings, final_keep_mask = keyframe_detection(final_embeddings, threshold = 0.95)
     final_timestamps = [final_timestamps[i] for i in range(len(final_keep_mask)) if final_keep_mask[i]]
     final_keyframes = [final_keyframes[i] for i in range(len(final_keep_mask)) if final_keep_mask[i]]
-    objects, num_objects = Yolo_object_detection(detector, final_keyframes)
+    objects = Yolo_object_detection(detector, final_keyframes)
 
     video_ids_without_ext = [video_ids_without_ext[i] for i in range(len(final_keep_mask)) if final_keep_mask[i]]
     final_distinct_embeddings = final_distinct_embeddings.cpu().numpy().astype(np.float32)
@@ -334,8 +327,7 @@ def extract_keyframes(model, processor, detector, collection, batch_path, outer_
               C.TIME_STAMPS_NAME: final_timestamps[i],
               C.VECTOR_EMBEDDING_NAME: final_distinct_embeddings[i],
               C.FRAME_PATH_NAME: frame_paths[i],
-              C.VECTOR_OBJECT_NAME: objects[i],
-              C.NUM_OBJECTS: num_objects[i]}
+              C.VECTOR_OBJECT_NAME: objects[i]}
              for i in range(len(frame_ids))]
 
     return batch
