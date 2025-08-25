@@ -1,7 +1,5 @@
 from pymilvus import connections, FieldSchema, CollectionSchema, DataType, Collection
-
-from Constants import BATCH_DIRS
-from Preprocessing import load_embedding_model, extract_keyframes, load_Yolo
+from Preprocessing import load_embedding_model, extract_keyframes, load_Yolo, _clear_temp
 from tqdm import tqdm
 import Constants as C
 
@@ -92,20 +90,22 @@ if __name__ == "__main__":
                                           port="19530")
     print()
 
-    outer_bar = tqdm(range(len(BATCH_DIRS)), desc="Processing batches", unit="batch", position=0)
+    outer_bar = tqdm(range(1,2), desc="Processing batches", unit="batch", position=0)
 
     for i in outer_bar:
         batch_dir = C.BATCH_DIRS[i]
         batch_id = C.BATCH_IDS[i]
-        vector_batch = extract_keyframes(model=embedding_model,
+        vector_generator = extract_keyframes(model=embedding_model,
                                          processor=embedding_processor,
                                          detector = detector,
                                          collection=milvus_collection,
                                          batch_path=batch_dir,
                                          threshold=0.9,
-                                         frame_interval = 0.75,
+                                         frame_interval = 0.5,
                                          outer_bar=outer_bar)
 
-
-        add_records(milvus_collection, vector_batch)
+        for idx, vector_batch in enumerate(vector_generator):
+            add_records(milvus_collection, vector_batch)
+            print(f"flushed batch {idx}")
+    _clear_temp()
     milvus_collection.compact()
