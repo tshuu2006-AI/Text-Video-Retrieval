@@ -60,6 +60,7 @@ def db_initialization(name, alias, host, port):
         collection = Collection(collection_name)
 
         print(f"Connected to existing milvus_collection '{collection_name}'.")
+        print(f"Total records: {collection.num_entities}")
 
     collection.load()
     return collection
@@ -77,7 +78,7 @@ def add_records(collection, batch) -> None:
     """
     if len(batch) == 0:
         return
-    collection.insert(batch)
+    collection.upsert(batch)
     collection.flush()
 
 
@@ -90,7 +91,7 @@ if __name__ == "__main__":
                                           port="19530")
     print()
 
-    outer_bar = tqdm(range(1,2), desc="Processing batches", unit="batch", position=0)
+    outer_bar = tqdm(range(13,len(C.BATCH_DIRS)), desc="Processing batches", unit="batch", position=0)
 
     for i in outer_bar:
         batch_dir = C.BATCH_DIRS[i]
@@ -100,7 +101,7 @@ if __name__ == "__main__":
                                          detector = detector,
                                          collection=milvus_collection,
                                          batch_path=batch_dir,
-                                         threshold=0.9,
+                                         threshold=0.8,
                                          frame_interval = 0.5,
                                          outer_bar=outer_bar)
 

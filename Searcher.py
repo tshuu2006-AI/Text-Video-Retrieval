@@ -59,22 +59,24 @@ def get_embeddings(model, processor, texts: list[str]):
 
 
 
-def search_by_objects(hits, entity_embeddings, top_k, alpha = 0.7):
+def search_by_objects(hits, entity_embeddings, top_k, alpha = 0.95):
     scores = []
     embedding_layer = _load_embedding_layer()
     num_entities = len(entity_embeddings)
     for hit in hits:
         objects = torch.tensor(list(hit.entity.get(C.VECTOR_OBJECT_NAME)),dtype=torch.long, device="cuda")
         embedding_objects = embedding_layer(objects).cpu().numpy()
-        cost_matrix = -1 * np.dot(entity_embeddings, embedding_objects.T)
+        cost_matrix = np.dot(entity_embeddings, embedding_objects.T)
+        cost_matrix[cost_matrix < 0] = 0
+        cost_matrix = -1 * cost_matrix
 
         a,b = cost_matrix.shape
-        if a < b:
-            pad = np.zeros(shape=(b - a, b))
-            cost_matrix = np.concatenate([cost_matrix, pad], axis = 0)
-        elif a > b:
-            pad = np.zeros(shape=(a, a - b))
+        if a > b:
+            pad = np.zeros(shape = (a, a - b))
             cost_matrix = np.concatenate([cost_matrix, pad], axis = 1)
+        elif a < b:
+            pad = np.zeros(shape = (b - a, b))
+            cost_matrix = np.concatenate([cost_matrix, pad], axis=0)
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
         score = -1 * np.sum(cost_matrix[row_ind, col_ind]) * (1 - alpha) / num_entities + hit.score * alpha
         scores.append(score)

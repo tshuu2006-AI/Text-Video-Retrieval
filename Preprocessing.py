@@ -10,6 +10,16 @@ import json
 import torch.nn.functional as F
 import shutil
 
+
+
+def frame_hist_diff(frameA, frameB, threshold):
+    histA = cv2.calcHist([frameA], [0], None, [256], [0, 256])
+    histB = cv2.calcHist([frameB], [0], None, [256], [0, 256])
+    cv2.normalize(histA, histA)
+    cv2.normalize(histB, histB)
+    return cv2.compareHist(histA, histB, cv2.HISTCMP_CORREL) < threshold
+
+
 def load_Yolo(model_dir = "Models/yolov8x-oiv7.pt"):
     """
     Load the pre-trained object detecting model
@@ -164,63 +174,72 @@ def frame_processing(embedding_model,
                 keyframes: The distinct frames (list[PIL.Image])
                 time_stamps: The time stamps corresponding with the distinct keyframes (list[int])
     """
+    if len(frame_buffer) < 1:
+        return torch.tensor([]), [], []
 
     inputs = embedding_processor(images=frame_buffer, return_tensors="pt", padding=True).to(device)
     with torch.no_grad():
-        embeddings = embedding_model.get_image_features(**inputs)
+        embeddings = F.normalize(embedding_model.get_image_features(**inputs), p = 2, dim = 1)
 
-    keyframe_embeddings, keep_mask = keyframe_detection(embeddings, threshold)
+    # keyframe_embeddings, keep_mask = keyframe_detection(embeddings, threshold)
+    keep_mask = [False] * len(frame_buffer)
+    keep_mask[0] = True
+
+    for i in range(1, len(frame_buffer)):
+        if frame_hist_diff(frame_buffer[i], frame_buffer[i - 1], threshold = threshold):
+            keep_mask[i] = True
     time_stamps = [time_stamps[i] for i in range(len(keep_mask)) if keep_mask[i]]
     keyframes = [frame_buffer[i] for i in range(len(keep_mask)) if keep_mask[i]]
+    keyframe_embeddings = embeddings[torch.tensor(keep_mask, dtype=torch.bool)]
 
     if len(keyframes) == 0:
         return torch.tensor([]), [], []
-    duplicate_mask = torch.zeros(size = (len(keyframe_embeddings), ), dtype = torch.bool)
+    # duplicate_mask = torch.zeros(size = (len(keyframe_embeddings), ), dtype = torch.bool)
 
-    if collection.num_entities > 0:
-        duplicate_mask = embedding_comparison(collection, keyframe_embeddings, threshold=threshold)
-    if duplicate_mask.shape[0] == 0:
-        return torch.tensor([]), [], []
-    unduplicate_mask = ~duplicate_mask
+    # if collection.num_entities > 0:
+    #     duplicate_mask = embedding_comparison(collection, keyframe_embeddings, threshold=threshold)
+    # if duplicate_mask.shape[0] == 0:
+    #     return torch.tensor([]), [], []
+    # unduplicate_mask = ~duplicate_mask
 
     # Update time_stamps and keyframes base on keep_mask
-    keyframe_embeddings = keyframe_embeddings[unduplicate_mask]
-    time_stamps = [time_stamps[i] for i in range(len(unduplicate_mask)) if unduplicate_mask[i]]
-    keyframes = [keyframes[i] for i in range(len(unduplicate_mask)) if unduplicate_mask[i]]
+    # keyframe_embeddings = keyframe_embeddings[unduplicate_mask]
+    # time_stamps = [time_stamps[i] for i in range(len(unduplicate_mask)) if unduplicate_mask[i]]
+    # keyframes = [keyframes[i] for i in range(len(unduplicate_mask)) if unduplicate_mask[i]]
 
     return keyframe_embeddings, keyframes, time_stamps
 
 
-def embedding_comparison(collection, embeddings, threshold):
-    """
-        Detect the embeddings that differ from the embeddings in the database
-
-            Args:
-                collection: The collection that contains embeddings (pymilvus.Collection)
-                embeddings: Tensor[float32] shape (N, D)
-                threshold: cosine similarity threshold
-
-            Returns:
-                duplicate_idx: determine which embeddings are similar (Tensor[bool], shape = (N,) )
-    """
-
-    results = collection.search(
-        data = embeddings.cpu().tolist(),
-        anns_field = C.VECTOR_EMBEDDING_NAME,
-        param = {"metric_type": "IP", "params": {"nprobe": 10}},
-        limit = 1
-    )
-
-    duplicate_idx = []
-    for hits in results:
-
-        if hits[0].score> threshold:
-            duplicate_idx.append(True)
-        else:
-            duplicate_idx.append(False)
-
-    duplicate_idx = torch.tensor(duplicate_idx, dtype = torch.bool)
-    return duplicate_idx
+# def embedding_comparison(collection, embeddings, threshold):
+#     """
+#         Detect the embeddings that differ from the embeddings in the database
+#
+#             Args:
+#                 collection: The collection that contains embeddings (pymilvus.Collection)
+#                 embeddings: Tensor[float32] shape (N, D)
+#                 threshold: cosine similarity threshold
+#
+#             Returns:
+#                 duplicate_idx: determine which embeddings are similar (Tensor[bool], shape = (N,) )
+#     """
+#
+#     results = collection.search(
+#         data = embeddings.cpu().tolist(),
+#         anns_field = C.VECTOR_EMBEDDING_NAME,
+#         param = {"metric_type": "IP", "params": {"nprobe": 10}},
+#         limit = 1
+#     )
+#
+#     duplicate_idx = []
+#     for hits in results:
+#
+#         if hits[0].score> threshold:
+#             duplicate_idx.append(True)
+#         else:
+#             duplicate_idx.append(False)
+#
+#     duplicate_idx = torch.tensor(duplicate_idx, dtype = torch.bool)
+#     return duplicate_idx
 
 def keyframe_detection(embeddings, threshold=0.95) -> tuple[torch.Tensor, torch.Tensor]:
     """
@@ -245,7 +264,7 @@ def keyframe_detection(embeddings, threshold=0.95) -> tuple[torch.Tensor, torch.
     return normalize_embeddings[keep_mask], keep_mask
 
 #Detect blurred image
-def is_blurry(image, blur_threshold=90, histogram_threshold = 0.5) -> bool:
+def is_blurry(image, blur_threshold=70, histogram_threshold = 0.4) -> bool:
 
     """
     Define an image is blurred or not
@@ -363,7 +382,6 @@ def extract_keyframes(model,
     video_ids = os.listdir(video_folder)
     frame_dirs = []
     start = 0
-
     while start < len(video_ids):
         _clear_temp()
         for idx, video_id in enumerate(video_ids[start: start + video_batch_size], start = start + 1):
@@ -380,24 +398,25 @@ def extract_keyframes(model,
             frame_buffer = []
             time_stamps = []
             cap = cv2.VideoCapture(os.path.join(video_folder, video_id))
-            fps = cap.get(cv2.CAP_PROP_FPS)
+            fps = round(cap.get(cv2.CAP_PROP_FPS))
             frame_idx = 0
             embeddings_idx = 0
+            time_stamp = 0
             while True:
 
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                cap.set(cv2.CAP_PROP_POS_MSEC, time_stamp * 1000)
                 ret, frame = cap.read()
 
                 if not ret:
                     break
 
                 if is_blurry(frame):
-                    frame_idx += round(fps * frame_interval)
+                    time_stamp += frame_interval
                     continue
 
                 frame_buffer.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                timestamp = frame_idx / fps
-                time_stamps.append(timestamp)
+                time_stamp += frame_interval
+                time_stamps.append(time_stamp)
                 frame_idx += round(fps * frame_interval)
 
                 # Khi buffer đầy, xử lý batch
@@ -459,9 +478,10 @@ def extract_keyframes(model,
                                directory = "temp/images",
                                batch_directory=f"temp/batch_images")
 
-        final_embeddings = _load_final_embeddings()
-        final_distinct_embeddings, final_keep_mask = keyframe_detection(final_embeddings,
-                                                                        threshold = 0.90)
+        final_distinct_embeddings = _load_final_embeddings()
+        # final_distinct_embeddings, final_keep_mask = keyframe_detection(final_embeddings,
+        #                                                                 threshold = 0.90)
+        final_keep_mask = [True] * len(final_distinct_embeddings)
         final_keyframes = _load_images()
 
         final_distinct_embeddings = final_distinct_embeddings.cpu().numpy().astype(np.float32)

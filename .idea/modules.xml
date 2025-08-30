@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/AIChallenge.iml" filepath="$PROJECT_DIR$/.idea/AIChallenge.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/Text_Video_Retrieval.iml" filepath="$PROJECT_DIR$/.idea/Text_Video_Retrieval.iml" />
     </modules>
   </component>
 </project>
