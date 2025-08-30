@@ -2,7 +2,7 @@ import google.generativeai as genai
 
 # Cấu hình API key của bạn
 # Thay 'YOUR_API_KEY' bằng key bạn đã lấy từ Google AI Studio
-GOOGLE_API_KEY = 'AIzaSyBzg_T5DxMotDoA2SWRonYza8nS3YedTFU'
+GOOGLE_API_KEY = ''
 genai.configure(api_key=GOOGLE_API_KEY)
 
 # Khởi tạo mô hình Gemini 1.5 Flash
